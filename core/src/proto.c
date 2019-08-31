@@ -113,6 +113,7 @@ done:
 
 		/* Handle reset flag */
 		reset = peripheral_get_reset();
+		reset = reset ? true : sm_flag_reset();
 		if (reset) {
 			/* TODO: Unregister before reseting */
 			LOG_INF("Reseting system...");

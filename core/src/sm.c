@@ -11,22 +11,26 @@
 #include <zephyr.h>
 #include <net/net_core.h>
 #include <logging/log.h>
+#include <misc/reboot.h>
 
 #include <knot/knot_protocol.h>
 #include "proxy.h"
 #include "msg.h"
 #include "sm.h"
 #include "storage.h"
+#include "clear.h"
 #include "peripheral.h"
 
 LOG_MODULE_DECLARE(knot, CONFIG_KNOT_LOG_LEVEL);
 
 #define TIMEOUT_WIN				3 /* 3 sec */
+#define TIMEOUT_UNREG				1 /* 3 sec */
 
 static struct k_timer to;	/* Re-send timeout */
 static u8_t xpt_opcode;		/* Expected response OPCODE */
 static bool to_on;		/* Timeout active */
 static bool to_xpr;		/* Timeout expired */
+static bool rst;		/* Reset flag */
 
 /*
  * Internally uuid and token must be null terminated. When copying or
@@ -321,10 +325,16 @@ polling:
 	return len;
 }
 
+static void reset_thing(struct k_timer *timer)
+{
+	rst = true;
+}
+
 static size_t process_cmd(const u8_t *ipdu, size_t ilen,
 			  u8_t *opdu, size_t olen)
 {
 	const knot_msg *imsg = (knot_msg *) ipdu;
+	struct k_timer unreg_timer;
 	knot_msg *omsg = (knot_msg *) opdu;
 	size_t len = 0;
 
@@ -335,6 +345,10 @@ static size_t process_cmd(const u8_t *ipdu, size_t ilen,
 	switch (imsg->hdr.type) {
 	case KNOT_MSG_UNREG_REQ:
 		/* Clear NVM */
+		k_timer_init(&unreg_timer, reset_thing, NULL);
+		/* Wait 1 second until receive response and reset thing */
+		k_timer_start(&unreg_timer, K_SECONDS(TIMEOUT_UNREG), 0);
+		len = msg_create_unregister(omsg);
 		break;
 	case KNOT_MSG_POLL_DATA_REQ:
 		id = imsg->data.sensor_id;
@@ -422,6 +436,11 @@ static enum sm_state state_online(u8_t *xpt_opcode,
 		*len = ret_len;
 
 	return next;
+}
+
+bool sm_flag_reset()
+{
+	return rst;
 }
 
 /*
