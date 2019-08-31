@@ -11,6 +11,7 @@
 #include <zephyr.h>
 #include <net/net_core.h>
 #include <logging/log.h>
+#include <misc/reboot.h>
 
 #include <knot/knot_protocol.h>
 #include "proxy.h"
@@ -22,6 +23,7 @@
 LOG_MODULE_DECLARE(knot, CONFIG_KNOT_LOG_LEVEL);
 
 #define TIMEOUT_WIN				3 /* 3 sec */
+#define TIMEOUT_UNREG				1 /* 3 sec */
 
 static struct k_timer to;	/* Re-send timeout */
 static u8_t xpt_opcode;		/* Expected response OPCODE */
@@ -321,10 +323,23 @@ polling:
 	return len;
 }
 
+static void reset_thing(struct k_timer *timer)
+{
+	int ret;
+
+	LOG_INF("Resetting system...");
+	ret = storage_reset();
+	if (ret)
+		LOG_ERR("Something wrong in storage reset");
+
+	sys_reboot(SYS_REBOOT_WARM);
+}
+
 static size_t process_cmd(const u8_t *ipdu, size_t ilen,
 			  u8_t *opdu, size_t olen)
 {
 	const knot_msg *imsg = (knot_msg *) ipdu;
+	struct k_timer unreg_timer;
 	knot_msg *omsg = (knot_msg *) opdu;
 	size_t len = 0;
 
@@ -335,6 +350,10 @@ static size_t process_cmd(const u8_t *ipdu, size_t ilen,
 	switch (imsg->hdr.type) {
 	case KNOT_MSG_UNREG_REQ:
 		/* Clear NVM */
+		k_timer_init(&unreg_timer, reset_thing, NULL);
+		/* Wait 1 second until receive response and reset thing */
+		k_timer_start(&unreg_timer, K_SECONDS(TIMEOUT_UNREG), 0);
+		len = msg_create_unregister(omsg);
 		break;
 	case KNOT_MSG_POLL_DATA_REQ:
 		id = imsg->data.sensor_id;
